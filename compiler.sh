@@ -52,6 +52,9 @@ export CXXFLAGS="-Os -pipe"
 export CC="gcc"
 export CXX="g++"
 
+# Global variables
+FORCE_BUILD=false
+
 # Progress indicator
 show_progress() {
     local current=$1
@@ -258,6 +261,67 @@ declare -A PACKAGE_INFO=(
     ["check_configure"]="--prefix=$FFP_DIR"
 )
 
+# Show comprehensive help
+show_help() {
+    echo -e "${GREEN}${BOLD}"
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║           Universal Package Builder - ZyXEL NSA320          ║"
+    echo "║                 FFP (fonz fun plug) Enhanced                ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    echo -e "${CYAN}${BOLD}DESCRIPTION${NC}"
+    echo "  Build toolchain for ZyXEL NSA320 using FFP (fonz fun plug)"
+    echo "  Exact replication of original build scripts with enhancements"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}SYNOPSIS${NC}"
+    echo -e "  ${WHITE}$0 [OPTIONS] [COMMAND] [PACKAGE]${NC}"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}BUILD COMMANDS${NC}"
+    echo -e "  ${GREEN}build-all${NC}                    Build all packages in exact order"
+    echo -e "  ${GREEN}build [PACKAGE]${NC}             Build specific package and dependencies"
+    echo -e "  ${GREEN}list${NC}                        Show available packages"
+    echo -e "  ${GREEN}clean${NC}                       Clean build and cache directories"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}DOWNLOAD COMMANDS${NC}"
+    echo -e "  ${GREEN}-d, --download [PACKAGE]${NC}    Download source for package and dependencies"
+    echo -e "  ${GREEN}-d, --download all${NC}          Download all source packages"
+    echo -e "  ${GREEN}-d, --download status${NC}       Show download status"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}OPTIONS${NC}"
+    echo -e "  ${GREEN}-f, --force${NC}                 Force build without dependencies (build command only)"
+    echo -e "  ${GREEN}-h, --help${NC}                  Show this help message"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}AVAILABLE PACKAGES${NC}"
+    echo -e "  ${WHITE}gmp mpfr mpc isl libtool binutils m4 autoconf automake${NC}"
+    echo -e "  ${WHITE}libiconv gettext make pkg-config intltool help2man${NC}"
+    echo -e "  ${WHITE}texinfo bison flex tcl expect dejagnu check${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}${BOLD}EXAMPLES${NC}"
+    echo -e "  ${WHITE}$0 build-all${NC}                # Build complete toolchain"
+    echo -e "  ${WHITE}$0 build binutils${NC}           # Build binutils and all dependencies"
+    echo -e "  ${WHITE}$0 build binutils --force${NC}   # Build only binutils, skip dependencies"
+    echo -e "  ${WHITE}$0 -d all${NC}                   # Download all source packages"
+    echo -e "  ${WHITE}$0 -d gmp${NC}                   # Download gmp and dependencies"
+    echo -e "  ${WHITE}$0 -d status${NC}                # Show download status"
+    echo -e "  ${WHITE}$0 list${NC}                     # Show available packages"
+    echo -e "  ${WHITE}$0 clean${NC}                    # Clean build and cache"
+    echo ""
+    
+    echo -e "${CYAN}${BOLD}NOTES${NC}"
+    echo "  - Build order respects package dependencies"
+    echo "  - Use --force to build single package without dependencies"
+    echo "  - Source cache: $SRC_CACHE"
+    echo "  - Install directory: $FFP_DIR"
+    echo ""
+}
+
 # Download source only (without extraction)
 download_source_only() {
     local pkg=$1
@@ -279,7 +343,7 @@ download_source_only() {
     log_info "Downloading: $url"
     log_info "Destination: $cache_path"
     
-    if wget -q --show-progress -c -O "$cache_path" "$url"; then
+    if wget --continue -q --show-progress -c -O "$cache_path" "$url"; then
         local file_size=$(stat -c%s "$cache_path" 2>/dev/null || stat -f%z "$cache_path")
         log_success "Downloaded: $(numfmt --to=iec $file_size)"
     else
@@ -666,9 +730,10 @@ build_check() {
     rm -rf check-*
 }
 
-# Package builder with exact build order
+# Package builder with dependency handling
 build_package() {
     local pkg=$1
+    local force=$2
     local log_file="$FFP_DIR/var/log/${pkg}.log"
     local display_name=${PACKAGE_NAMES[$pkg]:-$pkg}
     
@@ -677,13 +742,20 @@ build_package() {
     log_step "Building $display_name..."
     log_info "Log file: $log_file"
     
-    # Build dependencies first
-    local deps=${DEPENDENCIES[$pkg]}
-    for dep in $deps; do
-        build_package "$dep"
-    done
+    # Build dependencies first unless force mode is enabled
+    if [ "$force" != "true" ]; then
+        local deps=${DEPENDENCIES[$pkg]}
+        if [ -n "$deps" ]; then
+            log_info "Building dependencies: $deps"
+            for dep in $deps; do
+                build_package "$dep" "false"
+            done
+        fi
+    else
+        log_warning "Force mode: Skipping dependencies for $display_name"
+    fi
     
-    # Build the package with nohup and logging as in original scripts
+    # Build the package
     {
         echo "=== Starting build of $pkg ==="
         date
@@ -712,9 +784,9 @@ show_system_info() {
     echo -e "${CYAN}Source Cache:${NC} $SRC_CACHE"
 }
 
-# Main function with download options
+# Main function with enhanced argument parsing
 main() {
-    local command="build-all"
+    local command=""
     local package=""
     
     # Show banner
@@ -725,6 +797,12 @@ main() {
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     
+    # Show help if no arguments provided
+    if [ $# -eq 0 ]; then
+        show_help
+        exit 0
+    fi
+    
     show_system_info
     echo
     create_directories
@@ -732,6 +810,14 @@ main() {
     # Parse command line options
     while [[ $# -gt 0 ]]; do
         case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--force)
+                FORCE_BUILD=true
+                shift
+                ;;
             -d|--download)
                 if [[ -n "$2" && ! "$2" =~ ^- ]]; then
                     package="$2"
@@ -767,8 +853,15 @@ main() {
                 ;;
             build)
                 command="build"
-                package="$2"
-                shift 2
+                if [[ -n "$2" && ! "$2" =~ ^- ]]; then
+                    package="$2"
+                    shift 2
+                else
+                    log_error "Build command requires a package name"
+                    echo -e "${CYAN}Available packages:${NC}"
+                    printf "  %s\n" "${!DEPENDENCIES[@]}" | sort
+                    exit 1
+                fi
                 ;;
             list)
                 command="list"
@@ -779,7 +872,9 @@ main() {
                 shift
                 ;;
             *)
-                echo "Unknown option: $1"
+                log_error "Unknown option: $1"
+                echo ""
+                show_help
                 exit 1
                 ;;
         esac
@@ -790,42 +885,42 @@ main() {
             log_step "Building all packages in exact order for ZyXEL NSA320..."
             
             # Phase 1: Core math libraries
-            build_package "gmp"
-            build_package "mpfr" 
-            build_package "mpc"
-            build_package "isl"
+            build_package "gmp" "false"
+            build_package "mpfr" "false"
+            build_package "mpc" "false"
+            build_package "isl" "false"
             
             # Phase 2: Libtool first (depends on exact GCC version)
-            build_package "libtool"
+            build_package "libtool" "false"
             
             # Phase 3: Binutils and build tools
-            build_package "binutils"
-            build_package "m4"
-            build_package "autoconf"
-            build_package "automake"
+            build_package "binutils" "false"
+            build_package "m4" "false"
+            build_package "autoconf" "false"
+            build_package "automake" "false"
             
             # Phase 4: Internationalization (with double libiconv)
-            build_package "libiconv"
-            build_package "gettext" 
-            build_package "libiconv"  # Second build as specified
+            build_package "libiconv" "false"
+            build_package "gettext" "false"
+            build_package "libiconv" "false"  # Second build as specified
             
             # Phase 5: Additional build tools
-            build_package "make"
-            build_package "pkg-config"
-            build_package "intltool"
-            build_package "help2man"
-            build_package "texinfo"
-            build_package "bison"
-            build_package "flex"
+            build_package "make" "false"
+            build_package "pkg-config" "false"
+            build_package "intltool" "false"
+            build_package "help2man" "false"
+            build_package "texinfo" "false"
+            build_package "bison" "false"
+            build_package "flex" "false"
             
             # Phase 6: Testing frameworks
-            build_package "tcl"
-            build_package "expect"
+            build_package "tcl" "false"
+            build_package "expect" "false"
             # dejagnu needs direct terminal access - handle specially
             log_step "Building dejagnu (needs direct terminal access)..."
             build_dejagnu >> $FFP_DIR/var/log/dejagnu.log 2>&1
             
-            build_package "check"
+            build_package "check" "false"
             
             log_success "All packages built successfully!"
             log_info "FFP toolchain installed to: $FFP_DIR"
@@ -833,7 +928,14 @@ main() {
             
         "build")
             if [ -n "$package" ]; then
-                build_package "$package"
+                if [ -n "${DEPENDENCIES[$package]}" ]; then
+                    build_package "$package" "$FORCE_BUILD"
+                else
+                    log_error "Unknown package '$package'"
+                    echo -e "${CYAN}Available packages:${NC}"
+                    printf "  %s\n" "${!DEPENDENCIES[@]}" | sort
+                    exit 1
+                fi
             else
                 log_error "Please specify a package to build"
                 echo -e "${CYAN}Available packages:${NC}"
@@ -883,25 +985,10 @@ main() {
             ;;
             
         *)
-            echo -e "${CYAN}${BOLD}Usage: $0 [OPTIONS]${NC}"
+            log_error "No valid command specified"
             echo ""
-            echo -e "${WHITE}Build options:${NC}"
-            echo "  build-all                    Build all packages in exact order"
-            echo "  build [PACKAGE]             Build specific package and dependencies"
-            echo "  list                        Show available packages"
-            echo "  clean                       Clean build and cache directories"
-            echo ""
-            echo -e "${WHITE}Download options:${NC}"
-            echo "  -d, --download [PACKAGE]    Download source for package and dependencies"
-            echo "  -d, --download all          Download all source packages"
-            echo "  -d, --download status       Show download status"
-            echo ""
-            echo -e "${YELLOW}Examples:${NC}"
-            echo "  $0 build-all                # Build complete toolchain"
-            echo "  $0 build binutils           # Build binutils and dependencies"
-            echo "  $0 -d all                   # Download all source packages"
-            echo "  $0 -d gmp                   # Download gmp and dependencies"
-            echo "  $0 -d status                # Show download status"
+            show_help
+            exit 1
             ;;
     esac
 }
