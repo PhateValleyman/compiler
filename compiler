@@ -1,0 +1,703 @@
+#!/bin/bash
+set -e
+
+# Universal Package Builder - Exact replication of original build scripts
+# Now with download-only options
+
+# Configuration from original scripts
+export FFP_DIR="/data/data/com.termux/files/home/compiler/ffp"
+export PATH="$FFP_DIR/bin:$PATH"
+export LD_LIBRARY_PATH="$FFP_DIR/lib:$LD_LIBRARY_PATH"
+export PKG_CONFIG_PATH="$FFP_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+export CPPFLAGS="-I$FFP_DIR/include"
+export LDFLAGS="-L$FFP_DIR/lib -Wl,-rpath,$FFP_DIR/lib"
+export CFLAGS="-Os -pipe"
+export CXXFLAGS="-Os -pipe"
+export CC="gcc"
+export CXX="g++"
+
+# Create directories
+mkdir -p $FFP_DIR/{bin,lib,include,share,man,share/doc,var/log,var/cache/src}
+mkdir -p /data/data/com.termux/files/home/compiler/tmp/ffp-build
+
+# Source cache directory
+SRC_CACHE="$FFP_DIR/var/cache/src"
+
+# Dependency tree based on exact build order
+declare -A DEPENDENCIES=(
+    ["gmp"]=""
+    ["mpfr"]="gmp" 
+    ["mpc"]="gmp mpfr"
+    ["isl"]="gmp"
+    ["libtool"]=""
+    ["binutils"]="gmp mpfr mpc isl"
+    ["m4"]=""
+    ["autoconf"]="m4"
+    ["automake"]="autoconf m4"
+    ["libiconv"]=""
+    ["gettext"]="libiconv"
+    ["make"]=""
+    ["pkg-config"]=""
+    ["intltool"]="autoconf automake libtool"
+    ["help2man"]=""
+    ["texinfo"]=""
+    ["bison"]=""
+    ["flex"]=""
+    ["tcl"]=""
+    ["expect"]="tcl"
+    ["dejagnu"]="expect tcl"
+    ["check"]=""
+)
+
+# Exact versions and URLs from original scripts
+declare -A PACKAGE_INFO=(
+    # From 1gmp.sh
+    ["gmp_version"]="6.3.0"
+    ["gmp_url"]="https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz"
+    ["gmp_configure"]="--prefix=$FFP_DIR --enable-cxx --enable-static --enable-shared"
+    
+    # From 2mpfr.sh  
+    ["mpfr_version"]="4.2.1"
+    ["mpfr_url"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz"
+    ["mpfr_configure"]="--prefix=$FFP_DIR --with-gmp=$FFP_DIR --enable-static --enable-shared"
+    
+    # From 3mpc.sh
+    ["mpc_version"]="1.3.1"
+    ["mpc_url"]="https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
+    ["mpc_configure"]="--prefix=$FFP_DIR --with-gmp=$FFP_DIR --with-mpfr=$FFP_DIR --enable-static --enable-shared"
+    
+    # From 4isl.sh
+    ["isl_version"]="0.26"
+    ["isl_url"]="https://downloads.sourceforge.net/project/libisl/isl-0.26.tar.xz"
+    ["isl_configure"]="--prefix=$FFP_DIR --with-gmp-prefix=$FFP_DIR --enable-static --enable-shared"
+    
+    # From libtool.sh
+    ["libtool_version"]="2.4.7"
+    ["libtool_url"]="https://ftp.gnu.org/gnu/libtool/libtool-2.4.7.tar.xz"
+    ["libtool_configure"]="--prefix=$FFP_DIR --enable-static --enable-shared"
+    
+    # From binutils.sh
+    ["binutils_version"]="2.42"
+    ["binutils_url"]="https://ftp.gnu.org/gnu/binutils/binutils-2.42.tar.xz"
+    ["binutils_configure"]="--prefix=$FFP_DIR --with-libiconv-prefix=$FFP_DIR --with-gmp=$FFP_DIR --with-mpfr=$FFP_DIR --with-mpc=$FFP_DIR --with-isl=$FFP_DIR --enable-gold --enable-ld --enable-plugins --enable-threads --disable-werror"
+    
+    # From m4.sh
+    ["m4_version"]="1.4.19"
+    ["m4_url"]="https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz"
+    ["m4_configure"]="--prefix=$FFP_DIR"
+    
+    # From autoconf.sh
+    ["autoconf_version"]="2.72"
+    ["autoconf_url"]="https://ftp.gnu.org/gnu/autoconf/autoconf-2.72.tar.xz"
+    ["autoconf_configure"]="--prefix=$FFP_DIR"
+    
+    # From automake.sh
+    ["automake_version"]="1.16.5"
+    ["automake_url"]="https://ftp.gnu.org/gnu/automake/automake-1.16.5.tar.xz"
+    ["automake_configure"]="--prefix=$FFP_DIR"
+    
+    # From libiconv.sh
+    ["libiconv_version"]="1.17"
+    ["libiconv_url"]="https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz"
+    ["libiconv_configure"]="--prefix=$FFP_DIR --enable-static --enable-shared"
+    
+    # From gettext.sh
+    ["gettext_version"]="0.22.5"
+    ["gettext_url"]="https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz"
+    ["gettext_configure"]="--prefix=$FFP_DIR --disable-java --disable-native-java --enable-threads --with-libiconv-prefix=$FFP_DIR"
+    
+    # From make.sh
+    ["make_version"]="4.4.1"
+    ["make_url"]="https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz"
+    ["make_configure"]="--prefix=$FFP_DIR --without-guile"
+    
+    # From pkg-config.sh
+    ["pkg-config_version"]="0.29.2"
+    ["pkg-config_url"]="https://pkg-config.freedesktop.org/releases/pkg-config-0.29.2.tar.gz"
+    ["pkg-config_configure"]="--prefix=$FFP_DIR --with-internal-glib --disable-host-tool"
+    
+    # From intltool.sh
+    ["intltool_version"]="0.51.0"
+    ["intltool_url"]="https://launchpad.net/intltool/trunk/0.51.0/+download/intltool-0.51.0.tar.gz"
+    ["intltool_configure"]="--prefix=$FFP_DIR"
+    
+    # From help2man.sh
+    ["help2man_version"]="1.49.3"
+    ["help2man_url"]="https://ftp.gnu.org/gnu/help2man/help2man-1.49.3.tar.xz"
+    ["help2man_configure"]="--prefix=$FFP_DIR"
+    
+    # From texinfo.sh
+    ["texinfo_version"]="7.1"
+    ["texinfo_url"]="https://ftp.gnu.org/gnu/texinfo/texinfo-7.1.tar.xz"
+    ["texinfo_configure"]="--prefix=$FFP_DIR"
+    
+    # From bison.sh
+    ["bison_version"]="3.8.2"
+    ["bison_url"]="https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz"
+    ["bison_configure"]="--prefix=$FFP_DIR"
+    
+    # From flex.sh
+    ["flex_version"]="2.6.4"
+    ["flex_url"]="https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz"
+    ["flex_configure"]="--prefix=$FFP_DIR"
+    
+    # From tcl.sh
+    ["tcl_version"]="8.6.13"
+    ["tcl_url"]="https://prdownloads.sourceforge.net/tcl/tcl8.6.13-src.tar.gz"
+    ["tcl_configure"]="--prefix=$FFP_DIR --enable-threads --enable-shared"
+    
+    # From expect.sh
+    ["expect_version"]="5.45.4"
+    ["expect_url"]="https://prdownloads.sourceforge.net/expect/expect5.45.4.tar.gz"
+    ["expect_configure"]="--prefix=$FFP_DIR --with-tcl=$FFP_DIR/lib --with-tclinclude=$FFP_DIR/include"
+    
+    # From dejagnu.sh
+    ["dejagnu_version"]="1.6.3"
+    ["dejagnu_url"]="https://ftp.gnu.org/gnu/dejagnu/dejagnu-1.6.3.tar.gz"
+    ["dejagnu_configure"]="--prefix=$FFP_DIR"
+    
+    # From check.sh
+    ["check_version"]="0.15.2"
+    ["check_url"]="https://github.com/libcheck/check/releases/download/0.15.2/check-0.15.2.tar.gz"
+    ["check_configure"]="--prefix=$FFP_DIR"
+)
+
+# Download source only (without extraction)
+download_source_only() {
+    local pkg=$1
+    local version=${PACKAGE_INFO[${pkg}_version]}
+    local url=${PACKAGE_INFO[${pkg}_url]}
+    
+    local filename=$(basename "$url")
+    local cache_path="$SRC_CACHE/$filename"
+    
+    echo "Downloading $pkg-$version..."
+    
+    if [ -f "$cache_path" ]; then
+        echo "  Already exists: $filename"
+        local existing_size=$(stat -c%s "$cache_path" 2>/dev/null || stat -f%z "$cache_path")
+        echo "  Size: $existing_size bytes"
+        return 0
+    fi
+    
+    echo "  URL: $url"
+    echo "  Saving to: $cache_path"
+    
+    if wget -c -O "$cache_path" "$url"; then
+        local file_size=$(stat -c%s "$cache_path" 2>/dev/null || stat -f%z "$cache_path")
+        echo "  Download successful: $file_size bytes"
+    else
+        echo "  ERROR: Failed to download $pkg"
+        rm -f "$cache_path"
+        return 1
+    fi
+}
+
+# Download and extract function for building
+download_extract() {
+    local pkg=$1
+    local version=${PACKAGE_INFO[${pkg}_version]}
+    local url=${PACKAGE_INFO[${pkg}_url]}
+    
+    local filename=$(basename "$url")
+    local cache_path="$SRC_CACHE/$filename"
+    
+    # Download if not in cache
+    if [ ! -f "$cache_path" ]; then
+        echo "Downloading $pkg-$version..."
+        if ! wget -c -O "$cache_path" "$url"; then
+            echo "Failed to download $pkg"
+            return 1
+        fi
+    fi
+    
+    # Copy to tmp for building
+    cp "$cache_path" "/tmp/$filename"
+    
+    echo "Extracting $pkg-$version..."
+    tar -xf "/tmp/$filename" -C /tmp/ffp-build/
+    local extracted_dir=$(tar -tf "/tmp/$filename" | head -1 | cut -f1 -d"/")
+    cd "/tmp/ffp-build/$extracted_dir"
+}
+
+# Download package and its dependencies
+download_package() {
+    local pkg=$1
+    
+    if [ -z "$pkg" ]; then
+        echo "Error: No package specified for download"
+        return 1
+    fi
+    
+    if [ -z "${DEPENDENCIES[$pkg]}" ]; then
+        echo "Error: Unknown package '$pkg'"
+        echo "Available packages: ${!DEPENDENCIES[@]}"
+        return 1
+    fi
+    
+    # Download dependencies first
+    local deps=${DEPENDENCIES[$pkg]}
+    for dep in $deps; do
+        echo "Downloading dependency: $dep for $pkg"
+        download_package "$dep"
+    done
+    
+    # Download the package itself
+    download_source_only "$pkg"
+}
+
+# Download all packages
+download_all() {
+    echo "Downloading all source packages..."
+    echo "Cache directory: $SRC_CACHE"
+    mkdir -p "$SRC_CACHE"
+    
+    local total=${#DEPENDENCIES[@]}
+    local count=0
+    
+    for pkg in "${!DEPENDENCIES[@]}"; do
+        count=$((count + 1))
+        echo "[$count/$total] Downloading $pkg..."
+        download_source_only "$pkg"
+        echo
+    done
+    
+    echo "All packages downloaded to $SRC_CACHE"
+    echo "Total files: $(ls "$SRC_CACHE" | wc -l)"
+    echo "Total size: $(du -sh "$SRC_CACHE" | cut -f1)"
+}
+
+# Show download status
+show_download_status() {
+    echo "Source cache status: $SRC_CACHE"
+    echo "==========================================="
+    
+    local total_packages=${#DEPENDENCIES[@]}
+    local downloaded=0
+    local total_size=0
+    
+    for pkg in "${!DEPENDENCIES[@]}"; do
+        local url=${PACKAGE_INFO[${pkg}_url]}
+        local filename=$(basename "$url")
+        local cache_path="$SRC_CACHE/$filename"
+        
+        if [ -f "$cache_path" ]; then
+            downloaded=$((downloaded + 1))
+            local size=$(stat -c%s "$cache_path" 2>/dev/null || stat -f%z "$cache_path")
+            total_size=$((total_size + size))
+            printf "✓ %-15s %s\n" "$pkg" "$(numfmt --to=iec $size)"
+        else
+            printf "✗ %-15s %s\n" "$pkg" "MISSING"
+        fi
+    done
+    
+    echo "==========================================="
+    echo "Downloaded: $downloaded/$total_packages packages"
+    echo "Total size: $(numfmt --to=iec $total_size)"
+    echo "Cache location: $SRC_CACHE"
+}
+
+# Build functions with exact configurations from original scripts
+build_gmp() {
+    download_extract "gmp"
+    ./configure ${PACKAGE_INFO[gmp_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf gmp-*
+}
+
+build_mpfr() {
+    download_extract "mpfr" 
+    ./configure ${PACKAGE_INFO[mpfr_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf mpfr-*
+}
+
+build_mpc() {
+    download_extract "mpc"
+    ./configure ${PACKAGE_INFO[mpc_configure]}
+    make -j$(nproc) 
+    make install
+    cd /tmp/ffp-build
+    rm -rf mpc-*
+}
+
+build_isl() {
+    download_extract "isl"
+    ./configure ${PACKAGE_INFO[isl_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf isl-*
+}
+
+build_libtool() {
+    download_extract "libtool"
+    ./configure ${PACKAGE_INFO[libtool_configure]}
+    make -j$(nproc)
+    make install
+    libtool --finish $FFP_DIR/lib
+    cd /tmp/ffp-build
+    rm -rf libtool-*
+}
+
+build_binutils() {
+    download_extract "binutils"
+    ./configure ${PACKAGE_INFO[binutils_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    for link in ar as ld ld.bfd nm objcopy objdump ranlib readelf strip; do
+        ln -sf $link $(uname -m)-pc-linux-gnu-$link 2>/dev/null || true
+    done
+    cd /tmp/ffp-build
+    rm -rf binutils-*
+}
+
+build_m4() {
+    download_extract "m4"
+    ./configure ${PACKAGE_INFO[m4_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf m4-*
+}
+
+build_autoconf() {
+    download_extract "autoconf"
+    ./configure ${PACKAGE_INFO[autoconf_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf autoconf-*
+}
+
+build_automake() {
+    download_extract "automake"
+    ./configure ${PACKAGE_INFO[automake_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf aclocal aclocal-1.16 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf automake-*
+}
+
+build_libiconv() {
+    download_extract "libiconv"
+    ./configure ${PACKAGE_INFO[libiconv_configure]}
+    make -j$(nproc)
+    make install
+    if [ -f $FFP_DIR/lib/charset.alias ]; then
+        mv $FFP_DIR/lib/charset.alias $FFP_DIR/lib/charset.alias.iconv
+    fi
+    cd /tmp/ffp-build
+    rm -rf libiconv-*
+}
+
+build_gettext() {
+    download_extract "gettext"
+    ./configure ${PACKAGE_INFO[gettext_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf msgfmt gmsgfmt 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf gettext-*
+}
+
+build_make() {
+    download_extract "make"
+    ./configure ${PACKAGE_INFO[make_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf make-*
+}
+
+build_pkg_config() {
+    download_extract "pkg-config"
+    ./configure ${PACKAGE_INFO[pkg-config_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf pkg-config-*
+}
+
+build_intltool() {
+    download_extract "intltool"
+    ./configure ${PACKAGE_INFO[intltool_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf intltool-*
+}
+
+build_help2man() {
+    download_extract "help2man"
+    ./configure ${PACKAGE_INFO[help2man_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf help2man-*
+}
+
+build_texinfo() {
+    download_extract "texinfo"
+    ./configure ${PACKAGE_INFO[texinfo_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf makeinfo texi2any 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf texinfo-*
+}
+
+build_bison() {
+    download_extract "bison"
+    ./configure ${PACKAGE_INFO[bison_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf bison yacc 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf bison-*
+}
+
+build_flex() {
+    download_extract "flex"
+    ./configure ${PACKAGE_INFO[flex_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf flex lex 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf flex-*
+}
+
+build_tcl() {
+    download_extract "tcl"
+    cd unix
+    ./configure ${PACKAGE_INFO[tcl_configure]}
+    make -j$(nproc)
+    make install
+    cd $FFP_DIR/bin
+    ln -sf tclsh8.6 tclsh 2>/dev/null || true
+    cd /tmp/ffp-build
+    rm -rf tcl-*
+}
+
+build_expect() {
+    download_extract "expect"
+    ./configure ${PACKAGE_INFO[expect_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf expect-*
+}
+
+build_dejagnu() {
+    download_extract "dejagnu"
+    ./configure ${PACKAGE_INFO[dejagnu_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf dejagnu-*
+}
+
+build_check() {
+    download_extract "check"
+    ./configure ${PACKAGE_INFO[check_configure]}
+    make -j$(nproc)
+    make install
+    cd /tmp/ffp-build
+    rm -rf check-*
+}
+
+# Package builder with exact build order
+build_package() {
+    local pkg=$1
+    local log_file="$FFP_DIR/var/log/${pkg}.log"
+    
+    mkdir -p $(dirname "$log_file")
+    
+    echo "Building $pkg... (logging to $log_file)"
+    
+    # Build dependencies first
+    local deps=${DEPENDENCIES[$pkg]}
+    for dep in $deps; do
+        build_package "$dep"
+    done
+    
+    # Build the package with nohup and logging as in original scripts
+    {
+        echo "=== Starting build of $pkg ==="
+        date
+        build_$pkg
+        echo "=== Completed build of $pkg ==="
+        date
+    } >> "$log_file" 2>&1 &
+    
+    local pid=$!
+    wait $pid
+    
+    echo "Completed $pkg"
+}
+
+# Main function with download options
+main() {
+    local command="build-all"
+    local package=""
+    
+    # Parse command line options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -d|--download)
+                if [[ -n "$2" && ! "$2" =~ ^- ]]; then
+                    package="$2"
+                    shift 2
+                else
+                    package="all"
+                    shift
+                fi
+                
+                case $package in
+                    "all")
+                        download_all
+                        ;;
+                    "status")
+                        show_download_status
+                        ;;
+                    *)
+                        if [ -n "${DEPENDENCIES[$package]}" ]; then
+                            download_package "$package"
+                        else
+                            echo "Error: Unknown package '$package'"
+                            echo "Available packages: ${!DEPENDENCIES[@]}"
+                            exit 1
+                        fi
+                        ;;
+                esac
+                exit 0
+                ;;
+            build-all)
+                command="build-all"
+                shift
+                ;;
+            build)
+                command="build"
+                package="$2"
+                shift 2
+                ;;
+            list)
+                command="list"
+                shift
+                ;;
+            clean)
+                command="clean"
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+    
+    case $command in
+        "build-all")
+            echo "Building all packages in exact order..."
+            
+            # Phase 1: Core math libraries
+            build_package "gmp"
+            build_package "mpfr" 
+            build_package "mpc"
+            build_package "isl"
+            
+            # Phase 2: Libtool first (depends on exact GCC version)
+            build_package "libtool"
+            
+            # Phase 3: Binutils and build tools
+            build_package "binutils"
+            build_package "m4"
+            build_package "autoconf"
+            build_package "automake"
+            
+            # Phase 4: Internationalization (with double libiconv)
+            build_package "libiconv"
+            build_package "gettext" 
+            build_package "libiconv"  # Second build as specified
+            
+            # Phase 5: Additional build tools
+            build_package "make"
+            build_package "pkg-config"
+            build_package "intltool"
+            build_package "help2man"
+            build_package "texinfo"
+            build_package "bison"
+            build_package "flex"
+            
+            # Phase 6: Testing frameworks
+            build_package "tcl"
+            build_package "expect"
+            # dejagnu needs direct terminal access - handle specially
+            echo "Building dejagnu (needs direct terminal access)..."
+            build_dejagnu >> $FFP_DIR/var/log/dejagnu.log 2>&1
+            
+            build_package "check"
+            ;;
+            
+        "build")
+            if [ -n "$package" ]; then
+                build_package "$package"
+            else
+                echo "Please specify a package to build"
+                echo "Available: ${!DEPENDENCIES[@]}"
+            fi
+            ;;
+            
+        "list")
+            echo "Available packages (in build order):"
+            echo "1. gmp, 2. mpfr, 3. mpc, 4. isl"
+            echo "5. libtool, 6. binutils, 7. m4, 8. autoconf, 9. automake"
+            echo "10. libiconv, 11. gettext, 12. libiconv (again)"
+            echo "13. make, 14. pkg-config, 15. intltool, 16. help2man, 17. texinfo"
+            echo "18. bison, 19. flex, 20. tcl, 21. expect, 22. dejagnu, 23. check"
+            ;;
+            
+        "clean")
+            echo "Cleaning build directories..."
+            rm -rf /tmp/ffp-build/*
+            echo "Cleaning source cache..."
+            rm -rf "$SRC_CACHE"/*
+            ;;
+            
+        *)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Build options:"
+            echo "  build-all                    Build all packages in exact order"
+            echo "  build [PACKAGE]             Build specific package and dependencies"
+            echo "  list                        Show available packages"
+            echo "  clean                       Clean build and cache directories"
+            echo ""
+            echo "Download options:"
+            echo "  -d, --download [PACKAGE]    Download source for package and dependencies"
+            echo "  -d, --download all          Download all source packages"
+            echo "  -d, --download status       Show download status"
+            echo ""
+            echo "Examples:"
+            echo "  $0 build-all                # Build complete toolchain"
+            echo "  $0 build binutils           # Build binutils and dependencies"
+            echo "  $0 -d all                   # Download all source packages"
+            echo "  $0 -d gmp                   # Download gmp and dependencies"
+            echo "  $0 -d status                # Show download status"
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"
